@@ -10,9 +10,10 @@
 PATERN="[!.]*.txt"                #patern to find files, note: this ignores directories starting with a dot
 GROUPED_FILE="all-in-one.txt"     #name of centralized file
 SORTED_FOLDER="sorted"            #name of sorted files folder
-TASKS=4                           #default number of tasks
-SKIP_GROUPING=0                   #skip grouping file step, use directly exsisting file
+TASKS=16                          #default number of tasks
+SKIP_GROUPING=1                   #skip grouping file step, use directly exsisting file
 CLEAR_TEMP=1                      #tell if clear temporary files
+PREFIX_FILE="length-"
 
 
 #test if source and destination is specified
@@ -26,7 +27,7 @@ else
   fi
 fi
 
-#get number of tasks and test if is number (default is 4)
+#get number of tasks and test if is number (default is 16)
 if [[ "$3" != "" ]]; then
   if [ -z "${3##[0-9]*}" ] && [[ "$3" -gt "0" ]]; then
     TASKS=$3
@@ -51,7 +52,7 @@ echo "Note: more settings at top of script"
 echo
 echo
 
-if [[ "$NO_CLEAR" != "0" ]]; then
+if [[ "$CLEAR_TEMP" != "0" ]]; then
   #creanup temporary files
   echo -n "Clean temporary files... "
   rm -rf "$2/tmp"
@@ -60,9 +61,10 @@ if [[ "$NO_CLEAR" != "0" ]]; then
 else
   echo "Skipped clean temp step"
 fi
+mkdir "$2/tmp" 2> /dev/null
 
 if [[ "$SKIP_GROUPING" == "0" ]]; then
-  if [[ "$NO_CLEAR" != "0" ]] || ! [[ -f "$2/tmp/$GROUPED_FILE.tmp" ]]; then
+  if [[ "$CLEAR_TEMP" != "0" ]] || ! [[ -f "$2/tmp/$GROUPED_FILE.tmp" ]]; then
 
     #sort files according to patern
     echo -n "Sorting files... "
@@ -73,7 +75,7 @@ if [[ "$SKIP_GROUPING" == "0" ]]; then
     echo -n "Grouping content... "
     echo > "$2/tmp/$GROUPED_FILE.tmp"
     for f in "${files[@]}"; do
-    cat -s "$f" | uniq -u >> "$2/tmp/$GROUPED_FILE.tmp"
+      cat -s "$f" >> "$2/tmp/$GROUPED_FILE.tmp"
     done
     echo "Done"
 
@@ -84,70 +86,42 @@ if [[ "$SKIP_GROUPING" == "0" ]]; then
 
   else
     echo "Use temp for grouped file"
-    cp "$2/tmp/$GROUPED_FILE.tmp" "$2/$GROUPED_FILE"
+    sort "$2/tmp/$GROUPED_FILE.tmp" | uniq -u > "$2/$GROUPED_FILE"
   fi
 else
   echo "Skipped grouping step"
 fi
 
-#setup folder, read total lines and devide it for tasks
-echo "Started setup for tasks"
+#setup folders and split the grouped file for tasks
 rm -rf "$2/$SORTED_FOLDER"
 mkdir "$2/$SORTED_FOLDER"
 
-echo "Create background tasks..."
-
-echo "Reading lines and dividing up the tasks... "
+echo "Spliting grouped file... "
 total=($(wc -l "$2/$GROUPED_FILE"))
 per_task=$(((${total[0]}+$TASKS-1)/$TASKS))
-echo "Centralized total lines: ${total[0]}"
-
-for p in $(seq 1 $TASKS); do
-  if [[ "$CLEAR_TEMP" != "0" ]] && ! [[ -f "$2/tmp/part$p" ]]; then
-    echo "Running task $p..."
-    {
-      sed -n "$((($p-1)*$per_task+1)),$(($p*$per_task))p" "$2/$GROUPED_FILE" > "$2/tmp/part$p"
-      sed -r 's/^ *//; s/ *$//; /^$/d; /^\s*$/d' "$2/tmp/part$p" > "$2/tmp/part$p.tmp"
-      rm "$2/tmp/part$p"
-      echo "Task$p: Done"
-    }&
-  fi
-done
-sleep 2
-echo "Waiting tasks finished..."
-wait
-echo
+echo "Total lines: ${total[0]}"
+cd tmp
+split -d -l $per_task "../$2/$GROUPED_FILE" part
+cd ..
 
 #Run tasks
-echo "OK, now shorting everything..."
-for t in $(seq 1 $TASKS); do
-  echo "Running task $t..."
+echo "Sorting everything..."
+i=0
+for f in $(find "$2/tmp" -name "part*" -type f); do
+  echo "Running task $i..."
   {
-    echo "Reading cache file..."
-    readarray file < "$2/tmp/part$t.tmp"
-    echo "Task$t: Sorting result of ${#file[@]} lines by the length in files..."
-    for i in "${file[@]}"; do
-      if [[ "${#i}" != "1" ]]; then
-        echo -n "$i" >> "$2/$SORTED_FOLDER/length-$((${#i}-1)).txt"
-      fi
-    done
-    echo "Task$t: Done"
-  }&
+    echo "Task$i: Sorting file '$f' by lines length ..."
+    awk '{print >> "'$2'/'$SORTED_FOLDER'/'$PREFIX_FILE'" length($0) ".txt"}' "$f"
+    echo "Task$i: Done"
+  } &
+  ((i+=1))
 done
 
 #wait tasks finished to continue
 sleep 2
-echo "Waiting background tasks..."
+echo "Waiting for background tasks..."
 wait
 echo "All background tasks finished"
-
-#and now sort all file and cut duplicated (normally must don't appening)
-echo -n "Sorting content of created files... "
-for i in $(find "$2/$SORTED_FOLDER" -name "length-*.txt" -type f); do
-  sort "$i" | uniq -u > "$i.tmp"
-  mv -f "$i.tmp" "$i"
-done
-echo "Done"
 
 if [[ "$CLEAR_TEMP" != "0" ]]; then
   #creanup temporary files
@@ -160,5 +134,5 @@ fi
 
 #cool message for the end
 echo
-echo "All steps finished, enjoy!"
+echo "All steps finished."
 
